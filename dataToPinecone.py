@@ -1,7 +1,8 @@
 import os
 from dotenv import load_dotenv
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.document_loaders import PyPDFLoader
+from langchain_community.document_loaders import DirectoryLoader, PyMuPDFLoader
+from langchain_community.document_loaders import PyPDFLoader
 import torch
 from transformers import AutoTokenizer, AutoModel
 from pinecone import Pinecone, ServerlessSpec
@@ -18,9 +19,10 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 pc = Pinecone(api_key=PINECONE_API_KEY)
 
 # 인덱스 이름과 설정
-index_name = "selective-time"
+index_name = "lawbot"
 dimension = 768  # HuggingFace KoSimCSE 로버타 모델의 임베딩 차원
 metric = "cosine"
+# 텍스트 길이에 영향을 받지 않는 cosine 알고리즘 채택, 텍스트의 방향성(내용)을 잘 반영해줌.
 
 # 인덱스 존재 여부 확인 및 생성
 existing_indexes = [index.name for index in pc.list_indexes().indexes]
@@ -85,30 +87,41 @@ class MyEmbeddingModel:  # 커스텀 임베딩 클래스
             embedding = outputs.last_hidden_state.mean(dim=1).squeeze().tolist()
         return embedding
 
-
 embed_model_name = "BM-K/KoSimCSE-roberta-multitask"
 embedding_model = MyEmbeddingModel(embed_model_name)
-
 
 def generate_vector_id(text, index):
     unique_string = f"{text}_{index}"
     return hashlib.md5(unique_string.encode('utf-8')).hexdigest()
 
-
 if __name__ == "__main__":
     # PDF 파일 경로 설정
-    path = "selectiveTime/장애인고용촉진및직업재활법.pdf"
+    loader = DirectoryLoader("datas/construct_day_labor", glob="**/*.pdf", loader_cls=PyMuPDFLoader)
+    docs = loader.load()
+    set_files = set()
 
-    documents = process_pdf(path)
+    # 각각의 개별 PDF불러오기
+    for doc in docs:
+        source = doc.metadata['source']
+        if source not in set_files:
+            set_files.add(source)
+
+    all_documents = []
+    path = ""
+    for file_path in set_files:
+        path = file_path
+        documents = process_pdf(file_path)
+        all_documents.extend(documents)
+
 
     data = []
-    for i, doc in enumerate(documents):
+    for i, doc in enumerate(all_documents):
         # 텍스트 조각 임베딩
         embedding = embedding_model.embed_documents(doc.page_content)
 
-        # 벡터 ID 생성
+        # 벡터 ID 생성 (즉 하나의 파일을 split 한 갯수만큼의 벡터 id생성)
         vector_id = generate_vector_id(doc.page_content, i)
-
+        print(vector_id)
         # 데이터 생성
         data.append({
             "id": vector_id,

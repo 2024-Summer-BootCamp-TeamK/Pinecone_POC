@@ -19,16 +19,12 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # 인덱스 이름 설정
-index_name = "lawbot"
-
-# 인덱스 열기
-index = pc.Index(index_name)
+index_names = ["legal-docs", "lawbot"]
 
 # 모델 및 토크나이저 설정
 model_name = "BM-K/KoSimCSE-roberta-multitask"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModel.from_pretrained(model_name)
-
 
 def embed_text_with_hf(text):
     inputs = tokenizer(text, padding=True, truncation=True, return_tensors="pt", max_length=512)
@@ -37,19 +33,25 @@ def embed_text_with_hf(text):
         embeddings = outputs.last_hidden_state.mean(dim=1).cpu().numpy().astype(np.float32)
     return embeddings.squeeze()
 
-
 # 검색 함수 정의
-def search_documents(query):
+def search_documents(index, query):
     query_embedding = embed_text_with_hf(query)
     if query_embedding.shape != (768,):  # 임베딩 벡터의 크기 확인
         raise ValueError(f"Embedding size is {query_embedding.shape}, expected (768,)")
-    result = index.query(vector=query_embedding.tolist(), top_k=10, include_metadata=True)
+    result = index.query(vector=query_embedding.tolist(), top_k=6, include_metadata=True)
     return [match['metadata']['text'] for match in result['matches']]
+
+def search_documents_legal_docs(index, query):
+    # 사용자 질문을 임베딩 벡터로 변환하기
+    query_embedding = embed_text_with_hf(query)
+    if query_embedding.shape != (768,):  # 임베딩 벡터의 크기 확인
+        raise ValueError(f"Embedding size is {query_embedding.shape}, expected (768,)")
+    result = index.query(vector=query_embedding.tolist(), top_k=6, include_metadata=True)
+    return [match['metadata']['세부항목'] for match in result['matches']]
 
 def read_file(file_path):
     with open(file_path, 'r', encoding='utf-8') as file:
         return file.read()
-
 
 if __name__ == "__main__":
     # 계약서 갖고오기
@@ -57,24 +59,27 @@ if __name__ == "__main__":
     with open(path, "r", encoding="utf-8") as file:
         contract_text = file.read()
     # 사용자 질문 설정
-    user_question = "{contract_text}\n이 법률적으로 검토해야 할 계약서 입니다\n"
+    user_question =f"{contract_text}\n이 법률적으로 검토해야 할 계약서 입니다\n"
 
-    # 문서 검색 결과 가져오기
-    search_results = search_documents(user_question)
-    # 검색된 문서 출력
-    # for i, doc in enumerate(search_results, 1):
-    #     print(f"Search result {i}: {doc}")
+    refined_search_results = []
+    for index_name in index_names:
+        try:
+            index = pc.Index(index_name)
+            if index_name == "legal-docs":
+                refined_search_results.extend(search_documents_legal_docs(index, user_question))
+            else:
+                refined_search_results.extend(search_documents(index, user_question))
+        except Exception as e:
+            print(f"Error searching in index {index_name}: {str(e)}")
 
-    context = " ".join(search_results)
-    # context = " ".join(search_results)  # 검색된 문서 텍스트를 모두 하나의 문자열로 결합
-    # print(f"Context: {context}")
-
+    # 검색된 문서 텍스트를 모두 하나의 문자열로 결합
+    context = " ".join(refined_search_results)
     # OpenAI 모델 설정
     llm = ChatOpenAI(model_name="gpt-3.5-turbo", openai_api_key=OPENAI_API_KEY)
     prompt_template = PromptTemplate(
         input_variables=["context", "user_question"],
         template=prompts.GUIDELINE_PROMPT
-    )
+        )
     llm_sequence = prompt_template | llm
 
     # 질문과 검색된 문서 내용을 사용하여 모델에 invoke
