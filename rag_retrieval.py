@@ -1,13 +1,15 @@
 import os
+
+import fitz
 from dotenv import load_dotenv
 from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
 import torch
-from transformers import AutoTokenizer, AutoModel
+from transformers import AutoTokenizer, AutoModelForCausalLM
 import numpy as np
 from dataToPinecone import pc
-import json
 import prompts
+
 
 # .env 파일에서 환경 변수 로드
 load_dotenv()
@@ -22,9 +24,13 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 index_names = ["legal-docs", "lawbot"]
 
 # 모델 및 토크나이저 설정
-model_name = "BM-K/KoSimCSE-roberta-multitask"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModel.from_pretrained(model_name)
+# model_name = "BM-K/KoSimCSE-roberta-multitask"
+# tokenizer = AutoTokenizer.from_pretrained(model_name)
+# model = AutoModel.from_pretrained(model_name)
+
+
+tokenizer = AutoTokenizer.from_pretrained("hyunseoki/ko-en-llama2-13b")
+model = AutoModelForCausalLM.from_pretrained("hyunseoki/ko-en-llama2-13b")
 
 def embed_text_with_hf(text):
     inputs = tokenizer(text, padding=True, truncation=True, return_tensors="pt", max_length=512)
@@ -53,13 +59,21 @@ def read_file(file_path):
     with open(file_path, 'r', encoding='utf-8') as file:
         return file.read()
 
+def extract_text_from_pdf(pdf_path):
+    doc = fitz.open(pdf_path)
+    text = ""
+    for page_num in range(len(doc)):
+        page = doc.load_page(page_num)
+        text += page.get_text()
+    return text
+
+
 if __name__ == "__main__":
     # 계약서 갖고오기
-    path = "wrong_contract_construct/wrong_construct_withLaw.txt"
-    with open(path, "r", encoding="utf-8") as file:
-        contract_text = file.read()
+    path = "wrong_contract_construct/건설일용근로자 표준근로계약서 .pdf"
+    contract_text = extract_text_from_pdf(path)
     # 사용자 질문 설정
-    user_question =f"{contract_text}\n이 법률적으로 검토해야 할 계약서 입니다\n"
+    user_question = f"{contract_text}\n이 법률적으로 검토해야 할 계약서 입니다\n"
 
     refined_search_results = []
     for index_name in index_names:
